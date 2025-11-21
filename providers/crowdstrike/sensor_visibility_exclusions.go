@@ -15,10 +15,13 @@
 package crowdstrike
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	"github.com/GoogleCloudPlatform/terraformer/terraformutils"
+	"github.com/crowdstrike/gofalcon/falcon/client"
+	"github.com/crowdstrike/gofalcon/falcon/client/sensor_visibility_exclusions"
 )
 
 var (
@@ -55,6 +58,8 @@ func (g *SensorVisibilityExclusionGenerator) createResource(exclusionID string) 
 // from each sensor visibility exclusion create 1 TerraformResource.
 // Need Sensor Visibility Exclusion ID as ID for terraform resource
 func (g *SensorVisibilityExclusionGenerator) InitResources() error {
+	client := g.Args["client"].(*client.CrowdStrikeAPISpecification)
+
 	// Check if specific exclusions are requested via filter
 	resources := []terraformutils.Resource{}
 	for _, filter := range g.Filter {
@@ -70,8 +75,45 @@ func (g *SensorVisibilityExclusionGenerator) InitResources() error {
 		return nil
 	}
 
-	// For now, return empty resources as we need to determine the correct API method
-	// TODO: Implement proper sensor visibility exclusion querying once we understand the gofalcon API structure
-	g.Resources = []terraformutils.Resource{}
+	// Query all sensor visibility exclusions using the correct API
+	queryParams := &sensor_visibility_exclusions.QuerySensorVisibilityExclusionsV1Params{
+		Context: context.Background(),
+	}
+
+	resp, err := client.SensorVisibilityExclusions.QuerySensorVisibilityExclusionsV1(queryParams)
+	if err != nil {
+		return fmt.Errorf("failed to query sensor visibility exclusions: %v", err)
+	}
+
+	if resp.Payload == nil || resp.Payload.Resources == nil {
+		// No sensor visibility exclusions found - this is valid, return empty list
+		g.Resources = []terraformutils.Resource{}
+		return nil
+	}
+
+	// Get detailed information for each exclusion
+	if len(resp.Payload.Resources) > 0 {
+		getParams := &sensor_visibility_exclusions.GetSensorVisibilityExclusionsV1Params{
+			Context: context.Background(),
+			Ids:     resp.Payload.Resources,
+		}
+
+		detailResp, err := client.SensorVisibilityExclusions.GetSensorVisibilityExclusionsV1(getParams)
+		if err != nil {
+			return fmt.Errorf("failed to get sensor visibility exclusion details: %v", err)
+		}
+
+		if detailResp.Payload != nil && detailResp.Payload.Resources != nil {
+			// Convert API response to resource IDs
+			exclusionIDs := make([]string, 0, len(detailResp.Payload.Resources))
+			for _, exclusion := range detailResp.Payload.Resources {
+				if exclusion.ID != nil {
+					exclusionIDs = append(exclusionIDs, *exclusion.ID)
+				}
+			}
+			g.Resources = g.createResources(exclusionIDs)
+		}
+	}
+
 	return nil
 }

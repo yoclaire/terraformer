@@ -15,10 +15,13 @@
 package crowdstrike
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	"github.com/GoogleCloudPlatform/terraformer/terraformutils"
+	"github.com/crowdstrike/gofalcon/falcon/client"
+	"github.com/crowdstrike/gofalcon/falcon/client/content_update_policies"
 )
 
 var (
@@ -55,6 +58,8 @@ func (g *ContentUpdatePolicyGenerator) createResource(policyID string) terraform
 // from each content update policy create 1 TerraformResource.
 // Need Content Update Policy ID as ID for terraform resource
 func (g *ContentUpdatePolicyGenerator) InitResources() error {
+	client := g.Args["client"].(*client.CrowdStrikeAPISpecification)
+
 	// Check if specific policies are requested via filter
 	resources := []terraformutils.Resource{}
 	for _, filter := range g.Filter {
@@ -70,8 +75,30 @@ func (g *ContentUpdatePolicyGenerator) InitResources() error {
 		return nil
 	}
 
-	// For now, return empty resources as we need to determine the correct API method
-	// TODO: Implement proper content update policy querying once we understand the gofalcon API structure
-	g.Resources = []terraformutils.Resource{}
+	// Query all content update policies using the correct API
+	queryParams := &content_update_policies.QueryCombinedContentUpdatePoliciesParams{
+		Context: context.Background(),
+	}
+
+	resp, err := client.ContentUpdatePolicies.QueryCombinedContentUpdatePolicies(queryParams)
+	if err != nil {
+		return fmt.Errorf("failed to query content update policies: %v", err)
+	}
+
+	if resp.Payload == nil || resp.Payload.Resources == nil {
+		// No content update policies found - this is valid, return empty list
+		g.Resources = []terraformutils.Resource{}
+		return nil
+	}
+
+	// Convert API response to resource IDs
+	policyIDs := make([]string, 0, len(resp.Payload.Resources))
+	for _, policy := range resp.Payload.Resources {
+		if policy.ID != nil {
+			policyIDs = append(policyIDs, *policy.ID)
+		}
+	}
+
+	g.Resources = g.createResources(policyIDs)
 	return nil
 }

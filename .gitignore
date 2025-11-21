@@ -9,3 +9,8 @@ terraform.tfstate
 terraform.tfstate.backup
 init.tf
 vendor/
+# CrowdStrike development credentials (DO NOT COMMIT)
+.env.crowdstrike.local
+test-*-output/
+*-test-output/
+*.env.local

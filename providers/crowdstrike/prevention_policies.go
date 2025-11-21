@@ -15,10 +15,13 @@
 package crowdstrike
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	"github.com/GoogleCloudPlatform/terraformer/terraformutils"
+	"github.com/crowdstrike/gofalcon/falcon/client"
+	"github.com/crowdstrike/gofalcon/falcon/client/prevention_policies"
 )
 
 var (
@@ -55,6 +58,8 @@ func (g *PreventionPolicyGenerator) createResource(policyID, resourceType string
 // from each prevention policy create 1 TerraformResource.
 // Need Prevention Policy ID as ID for terraform resource
 func (g *PreventionPolicyGenerator) InitResources() error {
+	client := g.Args["client"].(*client.CrowdStrikeAPISpecification)
+
 	// Check if specific policies are requested via filter
 	resources := []terraformutils.Resource{}
 	for _, filter := range g.Filter {
@@ -70,8 +75,43 @@ func (g *PreventionPolicyGenerator) InitResources() error {
 		return nil
 	}
 
-	// For now, return empty resources as we need to determine the correct API method
-	// TODO: Implement proper prevention policy querying once we understand the gofalcon API structure
-	g.Resources = []terraformutils.Resource{}
+	// Query all prevention policies using the correct API
+	queryParams := &prevention_policies.QueryCombinedPreventionPoliciesParams{
+		Context: context.Background(),
+	}
+
+	resp, err := client.PreventionPolicies.QueryCombinedPreventionPolicies(queryParams)
+	if err != nil {
+		return fmt.Errorf("failed to query prevention policies: %v", err)
+	}
+
+	if resp.Payload == nil || resp.Payload.Resources == nil {
+		// No prevention policies found - this is valid, return empty list
+		g.Resources = []terraformutils.Resource{}
+		return nil
+	}
+
+	// Convert API response to resources with proper resource types
+	for _, policy := range resp.Payload.Resources {
+		if policy.ID != nil {
+			resourceType := "crowdstrike_prevention_policy"
+
+			// Determine specific resource type based on platform
+			if policy.PlatformName != nil {
+				switch strings.ToLower(*policy.PlatformName) {
+				case "windows":
+					resourceType = "crowdstrike_prevention_policy_windows"
+				case "mac":
+					resourceType = "crowdstrike_prevention_policy_mac"
+				case "linux":
+					resourceType = "crowdstrike_prevention_policy_linux"
+				}
+			}
+
+			resources = append(resources, g.createResource(*policy.ID, resourceType))
+		}
+	}
+
+	g.Resources = resources
 	return nil
 }

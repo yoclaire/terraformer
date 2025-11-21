@@ -15,10 +15,13 @@
 package crowdstrike
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	"github.com/GoogleCloudPlatform/terraformer/terraformutils"
+	"github.com/crowdstrike/gofalcon/falcon/client"
+	"github.com/crowdstrike/gofalcon/falcon/client/host_group"
 )
 
 var (
@@ -55,6 +58,8 @@ func (g *HostGroupGenerator) createResource(hostGroupID string) terraformutils.R
 // from each host group create 1 TerraformResource.
 // Need Host Group ID as ID for terraform resource
 func (g *HostGroupGenerator) InitResources() error {
+	client := g.Args["client"].(*client.CrowdStrikeAPISpecification)
+
 	// Check if specific host groups are requested via filter
 	resources := []terraformutils.Resource{}
 	for _, filter := range g.Filter {
@@ -70,8 +75,45 @@ func (g *HostGroupGenerator) InitResources() error {
 		return nil
 	}
 
-	// For now, return empty resources as we need to determine the correct API method
-	// TODO: Implement proper host group querying once we understand the gofalcon API structure
-	g.Resources = []terraformutils.Resource{}
+	// Query all host groups using the correct API
+	queryParams := &host_group.QueryHostGroupsParams{
+		Context: context.Background(),
+	}
+
+	resp, err := client.HostGroup.QueryHostGroups(queryParams)
+	if err != nil {
+		return fmt.Errorf("failed to query host groups: %v", err)
+	}
+
+	if resp.Payload == nil || resp.Payload.Resources == nil {
+		// No host groups found - this is valid, return empty list
+		g.Resources = []terraformutils.Resource{}
+		return nil
+	}
+
+	// Get detailed information for each host group
+	if len(resp.Payload.Resources) > 0 {
+		getParams := &host_group.GetHostGroupsParams{
+			Context: context.Background(),
+			Ids:     resp.Payload.Resources,
+		}
+
+		detailResp, err := client.HostGroup.GetHostGroups(getParams)
+		if err != nil {
+			return fmt.Errorf("failed to get host group details: %v", err)
+		}
+
+		if detailResp.Payload != nil && detailResp.Payload.Resources != nil {
+			// Convert API response to resource IDs
+			hostGroupIDs := make([]string, 0, len(detailResp.Payload.Resources))
+			for _, hostGroup := range detailResp.Payload.Resources {
+				if hostGroup.ID != nil {
+					hostGroupIDs = append(hostGroupIDs, *hostGroup.ID)
+				}
+			}
+			g.Resources = g.createResources(hostGroupIDs)
+		}
+	}
+
 	return nil
 }
